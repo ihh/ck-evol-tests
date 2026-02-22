@@ -1,0 +1,731 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+\usepackage{amsmath,amssymb}
+\usepackage{algpseudocodex}
+\usepackage{algorithm}
+
+\newcommand\prob[1]{\mbox{Pr}\left( #1 \right)}
+\newcommand\expect{\mathbb{E}}
+
+\newcommand\seclabel[1]{\label{sec:#1}}
+\newcommand\secref[1]{Section~\ref{sec:#1}}
+\newcommand\sref[1]{\S\ref{sec:#1}}
+
+\newcommand\alglabel[1]{\label{alg:#1}}
+\newcommand\algoref[1]{Algorithm~\ref{alg:#1}}
+
+\newcommand\algrequire[1]{\textbf{Input:} #1 \\}
+\newcommand\algensure[1]{\textbf{Output:} #1 \\}
+\newcommand\algforbreak{\textbf{break}}
+
+\title{Chapman-Kolmogorov regularizers for sequence evolvers}
+\author{Ian Holmes}
+
+\begin{document}
+
+\maketitle
+
+\abstract{A few ideas on how to quantify departures from non-Markovian behavior in neural approximators to matrix exponentials for whole-sequence evolutionary models, and some speculation on how this might be operationalized for training.}
+
+
+\section{Chapman-Kolmogorov for sequence evolvers}
+
+Suppose we have a model for a descendant sequence $Y$ given an ancestral sequence $X$ and an evolutionary time parameter $\ell_1$.
+Denote this model by $M(Y|X,\ell_1) \equiv \prob{Y|X,\ell_1,M}$.
+
+Consider a two-step evolution $A \xrightarrow{\ell_1} B \xrightarrow{\ell_2} C$
+under this model, where a sequence $A$ evolves over time $\ell_1$
+to another sequence $B$, which then evolves over time $\ell_2$ to a third sequence $C$.
+
+If we sum out $B$ we get a distribution for $C$ conditioned on $A$
+\[
+Z(C|A,\ell_1,\ell_2) = \sum_B M(B|A,\ell_1) M(C|B,\ell_2)
+\]
+
+If the model is Markovian and stationary then it must obey the Chapman-Kolmogorov equation
+\[
+M(C|A,\ell_1+\ell_2) = Z(C|A,\ell_1,\ell_2)
+\]
+for all sequences $A,C$ and times $\ell_1,\ell_2$.
+
+\section{Importance sampling}
+
+One challenge with using $Z$ is that it requires an infinite sum over intermediates $B$.
+However, we may be able to estimate $Z$ using a finite sum.
+
+The function $Z(C|A,\ell_1,\ell_2)$ can be written as an expectation
+\[
+Z(C|A,\ell_1,\ell_2) = \expect_{B \sim M(B|A,\ell_1)} \left[ M(C|B,\ell_2) \right]
+\]
+and can be viewed as the partition function for an implicit posterior over $B$
+\[
+\prob{B|A,C,\ell_1,\ell_2,M} = \frac{M(B|A,\ell_1) M(C|B,\ell_2)}{Z(C|A,\ell_1,\ell_2)}
+\]
+
+I suggest estimating $Z$ by importance sampling, using a proposal $q(B|A,C,\ell_1,\ell_2)$
+\[
+Z(C|A,\ell_1,\ell_2) = \expect_{B \sim q(B|A,C,\ell_1,\ell_2)} \left[ \frac{M(B|A,\ell_1) M(C|B,\ell_2)}{q(B|A,C,\ell_1,\ell_2)} \right]
+\]
+
+For finite sums, the variance of this estimator is smaller if we choose a proposal distribution that is
+close to $M$'s implicit posterior over $B$, i.e. $q \simeq \prob{B|A,C,\ell_1,\ell_2,M}$.
+
+For example, if $q$ is {\em exactly} that implicit posterior, then we are just taking the expectation of the (constant) $Z$, and the finite sum would be exact even if we only took one sample.
+Of course, this is circular reasoning:
+we do not know the implicit posterior, {\em because} we don't know $Z$.
+Furthermore, even if we could evaluate it for a given $B$, we might find it hard to generate samples from.
+However, it illustrates the point that $M$'s posterior for $B$ would be the {\em ideal} choice for $q$.
+
+A reasonable choice for $q$, then, seems to be a posterior distribution for a model whose posterior distribution over intermediaries $B$ we {\em can} evaluate, since it is Markovian (or almost-Markovian) by construction, and (furthermore) is one we can easily generate samples from---e.g. a model like TKF91,
+which is exactly solved---its finite-time distributions are expressible as HMMs in closed form---or TKF92,
+which is almost exactly solved (technically its Markovian state is a partitioned sequence,
+rather than a sequence {\em per se}, but in practice this seems not to perturb things too much).
+If this is a good model, its posterior distribution over intermediate sequences will be not {\em too} far
+from $M$'s, and we should be able to approximate $Z$ with a small sample.
+
+\section{TKF92 HMMs and algorithms}
+
+\newcommand\mat{{\tt M}}
+\newcommand\ins{{\tt I}}
+\newcommand\del{{\tt D}}
+\newcommand\nul{{\tt N}}
+\newcommand\wait{{\tt W}}
+\newcommand\sta{{\tt S}}
+\newcommand\fin{{\tt E}}
+
+\newcommand\smide{\{ \sta, \mat, \ins, \del, \fin \}}
+
+\newcommand\insrate{\lambda}
+\newcommand\delrate{\mu}
+\newcommand\fragext{r}
+
+\newcommand\submat{{\bf Q}}
+\newcommand\eqm{\pi}
+
+\newcommand\params{\theta}
+
+\newcommand\jointpairmatrix{{\tt JointPairMatrix}}
+\newcommand\jointpairhmm{{\tt JointPairHMM}}
+\newcommand\conditionalpairmatrix{{\tt ConditionalPairMatrix}}
+\newcommand\conditionalpairhmm{{\tt ConditionalPairHMM}}
+\newcommand\triadhmm{{\tt TriadHMM}}
+
+\newcommand\triadstart{{\tt SS}}
+\newcommand\stains{{\tt sI}}
+\newcommand\matmat{{\tt MM}}
+\newcommand\matins{{\tt mI}}
+\newcommand\matdel{{\tt MD}}
+\newcommand\insmat{{\tt IM}}
+\newcommand\insins{{\tt iI}}
+\newcommand\insdel{{\tt ID}}
+\newcommand\delsta{{\tt Ds}}
+\newcommand\delmat{{\tt Dm}}
+\newcommand\delins{{\tt Di}}
+\newcommand\deldel{{\tt Dd}}
+\newcommand\triadend{{\tt EE}}
+
+\newcommand\ymx{{\bf y}}
+\newcommand\zmx{{\bf z}}
+\newcommand\ty[1]{y_{#1}}
+\newcommand\tz[1]{z_{#1}}
+
+\newcommand\states{\Phi}
+\newcommand\alphabet{\Omega}
+\newcommand\seqalph{\Sigma}
+\newcommand\statetype{\tau}
+
+\newcommand\statepath{\phi}
+\newcommand\startstate{\statepath^{(\sta)}}
+\newcommand\finstate{\statepath^{(\fin)}}
+
+\newcommand\seqx{X}
+\newcommand\seqy{Y}
+\newcommand\len{L}
+
+\newcommand\toLower{\mbox{toLowerCase}}
+
+\newcommand\restorestates{{\tt RestoreStates}}
+\newcommand\eliminatestates{{\tt EliminateStates}}
+\newcommand\forwardmatrix{{\tt ForwardMatrix}}
+\newcommand\forwardlikelihood{{\tt ForwardLikelihood}}
+\newcommand\forwardtraceback{{\tt ForwardTraceback}}
+\newcommand\singletraceback{{\tt SingleTraceback}}
+\newcommand\strippath{{\tt StripPath}}
+\newcommand\sampleintermediates{{\tt SampleIntermediates}}
+
+\newcommand\pop{{\tt pop}}
+
+\subsection{Pair HMM definitions}
+\seclabel{PairHMMdefs}
+
+A Pair HMM $(\states,\alphabet,{\bf t},{\bf e},\statetype)$ has state space $\states$,
+output alphabet $\alphabet$,
+transition matrix ${\bf t}$, emission function ${\bf e}$,
+and state type function $\statetype:\states \to \{ \sta, \mat, \ins, \del, \nul, \fin \}$
+(signifying start, match, insert, delete, null, and end).
+There must be exactly one start state $\startstate$ with $\statetype(\startstate)=\sta$,
+and one end state $\finstate$ with $\statetype(\finstate)=\fin$.
+
+The transition matrix entry $t_{ij}$ is the probability that the next
+state will be $j$ given that the current state is $i$.
+It is required that $t_{k,\startstate}=t_{\finstate,k}=0$ for all $k \in \states$.
+
+Emissions occur on entry into states.
+Let $e_k(\omega,\omega')$ be the probability of emitting ancestral alignment symbol $\omega$
+and descendant alignment symbol $\omega'$ from state $k$,
+where $\omega,\omega' \in \alphabet \cup \{ \epsilon \}$ and $\epsilon$ is the empty string
+(denoting a gap in an alignment context).
+
+For all non-gap $\omega,\omega' \in \alphabet$, the emission probabilities must satisfy
+\begin{eqnarray*}
+    \statetype(k) = \mat & \Rightarrow & e_k(\omega,\epsilon) = e_k(\epsilon,\omega') = e_k(\epsilon,\epsilon) = 0 \\
+    \statetype(k) = \ins & \Rightarrow & e_k(\omega,\omega') = e_k(\omega,\epsilon) = e_k(\epsilon,\epsilon) = 0 \\
+    \statetype(k) = \del & \Rightarrow & e_k(\omega,\omega') = e_k(\epsilon,\omega') = e_k(\epsilon,\epsilon) = 0 \\
+    \statetype(k) \in \{ \sta, \fin, \nul \} & \Rightarrow & e_k(\omega,\omega') = e_k(\omega,\epsilon) = e_k(\epsilon,\omega') = 0
+\end{eqnarray*}
+
+Define the emission indicator functions
+\begin{eqnarray*}
+\Delta_{\seqx}(k) & = & \delta(\statetype(k) \in \{ \mat, \del \}) \\
+\Delta_{\seqy}(k) & = & \delta(\statetype(k) \in \{ \mat, \ins \})
+\end{eqnarray*}
+
+\subsection{TKF92 model}
+
+The TKF92 model has indel parameters $(\insrate,\delrate,\fragext)$ and substitution parameters $(\submat,\eqm)$.
+
+In this model,
+$k$-residue fragments (where $k>0$ and $\prob{k} = \fragext^{k-1}(1-\fragext)$) are inserted and deleted at rates $\insrate,\delrate$.
+The rate at which any given residue is deleted
+is just the rate at which its fragment is deleted, $\delrate$.
+The mean number of fragments at equilibrium is
+$\frac{\insrate/\delrate}{1-\insrate/\delrate} = \frac{1}{\delrate/\insrate - 1}$
+and the mean fragment length is $1/(1-\fragext)$,
+so the mean sequence length at equilibrium is 
+$\frac{1}{(\delrate/\insrate - 1)(1 - \fragext)}$.
+The precise distribution of sequence lengths at equilibrium is 
+a zero-altered geometric distribution
+\[
+\prob{n} = \left\{
+\begin{array}{ll}
+1 - \frac{\insrate}{\delrate} & \mbox{if $n=0$} \\
+\frac{\insrate}{\delrate} \nu^{n-1} \left( 1 - \nu \right) & \mbox{if $n>0$}
+\end{array}
+\right.
+\]
+where
+$\nu = \fragext + (1-\fragext)\frac{\insrate}{\delrate}$.
+
+
+The substitution parameters comprise a reversible substitution rate matrix $\submat$ and stationary distribution $\eqm$
+which must satisfy $\eqm \submat = 0$ (equilibrium)
+and $\eqm_i Q_{ij} = \eqm_j Q_{ji}$ (detailed balance).
+
+\subsection{TKF91 model}
+
+The TKF92 model reduces to the TKF91 model when $\fragext=0$.
+
+\subsection{TKF92 joint transition matrix}
+\seclabel{tkfjointmatrix}
+
+\begin{eqnarray*}
+\lefteqn{\jointpairmatrix(\insrate,\delrate,\fragext,\ell) = } & & \\
+& & \left( \begin{array}{r|ccccc}
+   & \sta & \mat & \ins & \del & \fin \\
+\hline
+\sta & 0 & (1-\beta)\kappa\alpha & \beta & (1-\beta)\kappa(1-\alpha) & (1-\beta)(1-\kappa) \\
+\mat & 0 & \fragext + (1-\fragext)(1-\beta)\kappa\alpha & (1-\fragext)\beta & (1-\fragext)(1-\beta)\kappa(1-\alpha) & (1-\fragext)(1-\beta)(1-\kappa) \\
+\ins & 0 & (1-\fragext)(1-\beta)\kappa\alpha & \fragext + (1-\fragext)\beta & (1-\fragext)(1-\beta)\kappa(1-\alpha) & (1-\fragext)(1-\beta)(1-\kappa) \\
+\del & 0 & (1-\fragext)(1-\gamma)\kappa\alpha & (1-\fragext)\gamma & \fragext + (1-\fragext)(1-\gamma)\kappa(1-\alpha) & (1-\fragext)(1-\gamma)(1-\kappa) \\
+\fin & 0 & 0 & 0 & 0 & 0
+   \end{array} \right)
+\end{eqnarray*}
+
+
+\begin{eqnarray*}
+    \alpha(\insrate,\delrate,\ell) & = &
+        \exp (-\delrate \ell) \\
+    \beta(\insrate,\delrate,\ell) & = &
+        \frac{\insrate \left( \exp (-\insrate \ell) - \exp (-\delrate \ell) \right)}
+        {\delrate \exp (-\insrate \ell) - \insrate \exp (-\delrate \ell)} \\
+    \\
+    \gamma(\insrate,\delrate,\ell) & = &
+        1 - \frac{\delrate \beta}{\insrate (1- \alpha)}
+    \\
+    \kappa(\insrate,\delrate) & = & \frac{\insrate}{\delrate}
+\end{eqnarray*}
+
+\subsection{TKF92 joint pair HMM}
+\seclabel{tkfjoint}
+
+\[
+\jointpairhmm(\params,\ell) = (\states,\seqalph,{\bf t},{\bf e},\statetype)
+\]
+where $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$.
+
+This is the full description of the HMM whose transition matrix
+is given in \secref{tkfjointmatrix}.
+Here $\seqalph$ denotes the sequence alphabet, i.e. the index space of the substitution model $(\submat,\eqm)$.
+
+We do not actually use this Pair HMM, or its transition matrix.
+It is provided only to make sense of the conditional transition matrix presented in
+\secref{tkfcondmatrix} and the associated conditional Pair HMM in \secref{tkfcond}.
+
+\begin{eqnarray*}
+   \states & = & \smide \\
+   {\bf t} & = & \jointpairmatrix(\insrate,\delrate,\fragext,\ell) \\
+   e_\mat(\omega,\omega') & = &
+   \left\{
+   \begin{array}{ll}
+   \eqm_{\omega} \exp(\submat \ell)_{\omega \omega'} & \mbox{if $\omega,\omega' \in \seqalph$}
+   \\ 0 & \mbox{otherwise}
+   \end{array}
+   \right. \\
+   e_\ins(\omega,\omega') & = & \eqm_{\omega'} \\
+   e_\del(\omega,\omega') & = & \eqm_{\omega} \\
+   \statetype(k) & = & k \\
+   \startstate & = & \sta \\
+   \finstate & = & \fin
+\end{eqnarray*}
+
+
+\subsection{TKF92 conditional transition matrix}
+\seclabel{tkfcondmatrix}
+
+The transition matrix for the conditional Pair HMM, which models the probability
+of a descendant sequence $\seqy$ conditioned on its ancestor $\seqx$, is obtained by dividing the
+$\seqx$-emitting transitions by the appropriate terms from the zero-altered distribution of
+ancestral sequence lengths
+
+\begin{eqnarray*}
+\lefteqn{\conditionalpairmatrix(\insrate,\delrate,\fragext,\ell) =} & & \\
+& & \left( \begin{array}{r|ccccc}
+   & \sta & \mat & \ins & \del & \fin \\
+\hline
+\sta & 0 & (1-\beta)\alpha & \beta & (1-\beta)(1-\alpha) & 1-\beta \\
+\mat & 0 & \frac{1}{\nu}(\fragext + (1-\fragext)(1-\beta)\kappa\alpha) & (1-\fragext)\beta & \frac{1}{\nu}(1-\fragext)(1-\beta)\kappa(1-\alpha) & 1-\beta \\
+\ins & 0 & \frac{1}{\nu}(1-\fragext)(1-\beta)\kappa\alpha & \fragext + (1-\fragext)\beta & \frac{1}{\nu}(1-\fragext)(1-\beta)\kappa(1-\alpha) & 1-\beta \\
+\del & 0 & \frac{1}{\nu}(1-\fragext)(1-\gamma)\kappa\alpha & (1-\fragext)\gamma & \frac{1}{\nu}(\fragext + (1-\fragext)(1-\gamma)\kappa(1-\alpha)) & 1-\gamma \\
+\fin & 0 & 0 & 0 & 0 & 0
+   \end{array} \right)
+\end{eqnarray*}
+
+\subsection{TKF92 conditional pair HMM}
+\seclabel{tkfcond}
+
+\[
+\conditionalpairhmm(\params,\ell) = (\states,\seqalph,{\bf t},{\bf e},\statetype)
+\]
+where $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$.
+
+This is the same as the joint pair HMM (\secref{tkfjoint}),
+except the transition matrix is as given in \secref{tkfcondmatrix}
+and the emission probabilities omit the $\eqm_\omega$ term for ancestral residues.
+
+\begin{eqnarray*}
+   \states & = & \smide \\
+   {\bf t} & = & \conditionalpairmatrix(\insrate,\delrate,\fragext,\ell) \\
+   e_\mat(\omega,\omega') & = &
+   \left\{
+   \begin{array}{ll}
+   \exp(\submat \ell)_{\omega \omega'} & \mbox{if $\omega,\omega' \in \seqalph$}
+   \\ 0 & \mbox{otherwise}
+   \end{array}
+   \right. \\
+   e_\ins(\omega,\omega') & = & \eqm_{\omega'} \\
+   e_\del(\omega,\omega') & = & 1 \\
+   \statetype(k) & = & k \\
+   \startstate & = & \sta \\
+   \finstate & = & \fin
+\end{eqnarray*}
+
+\subsection{Triad HMM}
+\seclabel{triadhmm}
+
+\[
+\triadhmm(\params,\ell_1,\ell_2) = (\states,\alphabet,{\bf t},{\bf e},\statetype)
+\]
+where $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$.
+
+This is the HMM for the conditional distribution $\prob{B,C|A,\theta,\ell_1,\ell_2}$, reflecting two generations
+of evolutionary drift: $A \xrightarrow{\ell_1} B \xrightarrow{\ell_2} C$.
+Technically it is a three-sequence HMM, but we will always use it conditioned on having
+sampled a state path from the posterior distribution of the pair HMM
+in \secref{tkfcond}, modeling the trajectory
+$A \xrightarrow{\ell_1 + \ell_2} C$.
+As such, we represent it as a single-sequence HMM whose output is
+a sequence of $\{\mat,\ins,\del\}$ state labels.
+(To avoid writing out a separate set of definitions and algorithms for single-sequence HMMs,
+we use the fact that a single-sequence HMM is a special case of a pair HMM,
+and simply constrain the first sequence to be empty; a wrapper function for this purpose
+is defined in \secref{SingleHMM}.)
+
+Each state can be considered a tuple comprising two states from the conditional pair HMM
+of \secref{tkfcond}:
+one for
+$A \xrightarrow{\ell_1} B$
+and one for
+$B \xrightarrow{\ell_2} C$.
+The upper/lower case symbols in the state name indicate which component(s) change
+on transition into the state.
+For example, transitions into \matdel\ change both components,
+but transitions into \insins\ only change the second component.
+(The cases are introduced to make the states and transitions more comprehensible;
+they do not have any other effect. The transition rules can be stated
+without reference to cases, and all state names remain
+unique even if they are all converted to the same case.)
+
+The transducer update rules are designed to keep the first component's token-emitting transitions
+synchronized with the second component's token-absorbing transitions:
+\begin{itemize}
+\item When the first component is updated, the second component can only update
+if the first component enters a token-outputting \mat, \ins, or \fin\ state.
+In the former two cases (first component goes to \mat\ or \ins) the second component must
+go to a \mat\ or \del\ state; in the latter case (first component goes to \fin)
+the second component must also go to \fin.
+(The latter case can be understood as the first component passing an unobserved end-of-sequence token to the second component.)
+\item If the first component transitions to a $\del$ state, the second component receives no input token, and cannot be updated.
+\item If the first component is {\em not} updated, the second component can only transition to an \ins\ state, which does not require an input token.
+\item If a component does not update, its state character is lower-cased.
+(Again, this has no effect on the semantics, except to indicate that the component was quiescent during the last transition.)
+\end{itemize}
+
+Thus, the transition matrix has the general form
+
+\[
+t_{ik,jl} = \left\{ \begin{array}{ll}
+0 & \mbox{if $jl=\triadstart$ or $ik=\triadend$} \\
+\tz{kl} & \mbox{if $i \neq \del$, $l=\ins$, and $j=\toLower(i)$} \\
+\ty{ij}\tz{kl} & \mbox{if $j \in \{ \mat,\ins \}$ and $l \in \{ \mat,\del \}$} \\
+\ty{ij} & \mbox{if $j = \del$ and $l = \toLower(k)$} \\
+\ty{ij}\tz{kl} & \mbox{if $jl=\triadend$} \\
+0 & \mbox{otherwise}
+\end{array} \right.
+\]
+
+In detail,
+
+\begin{eqnarray*}
+\lefteqn{{\bf t} = } & & \\
+& & \left( \begin{array}{r|ccccccccccccc}
+& \triadstart & \stains & \matmat & \matins & \matdel & \insmat & \insins & \insdel & \delsta & \delmat & \delins & \deldel & \triadend \\
+\hline
+\triadstart & 0 & \tz{\sta\ins} & \ty{\sta\mat}\tz{\sta\mat} & 0 & \ty{\sta\mat}\tz{\sta\del} & \ty{\sta\ins}\tz{\sta\mat} & 0 & \ty{\sta\ins}\tz{\sta\del} & \ty{\sta\del} & 0 & 0 & 0 & \ty{\sta\fin} \tz{\sta\fin}
+\\ \stains & 0 & \tz{\ins\ins} & \ty{\sta\mat}\tz{\ins\mat} & 0 & \ty{\sta\mat}\tz{\ins\del} & \ty{\sta\ins}\tz{\ins\mat} & 0 & \ty{\sta\ins}\tz{\ins\del} & 0 & 0 & \ty{\sta\del} & 0 & \ty{\sta\fin} \tz{\ins\fin}
+\\ \matmat & 0 & 0 & \ty{\mat\mat}\tz{\mat\mat} & \tz{\mat\ins} & \ty{\mat\mat}\tz{\mat\del} & \ty{\mat\ins}\tz{\mat\mat} & 0 & \ty{\mat\ins}\tz{\mat\del} & 0 & \ty{\mat\del} & 0 & 0 & \ty{\mat\fin} \tz{\mat\fin}
+\\ \matins & 0 & 0 & \ty{\mat\mat}\tz{\ins\mat} & \tz{\ins\ins} & \ty{\mat\mat}\tz{\ins\del} & \ty{\mat\ins}\tz{\ins\mat} & 0 & \ty{\mat\ins}\tz{\ins\del} & 0 & 0 & \ty{\mat\del} & 0 & \ty{\mat\fin} \tz{\ins\fin}
+\\ \matdel & 0 & 0 & \ty{\mat\mat}\tz{\del\mat} & \tz{\del\ins} & \ty{\mat\mat}\tz{\del\del} & \ty{\mat\ins}\tz{\del\mat} & 0 & \ty{\mat\ins}\tz{\del\del} & 0 & 0 & 0 & \ty{\mat\del} & \ty{\mat\fin} \tz{\del\fin}
+\\ \insmat & 0 & 0 & \ty{\ins\mat}\tz{\mat\mat} & 0 & \ty{\ins\mat}\tz{\mat\del} & \ty{\ins\ins}\tz{\mat\mat} & \tz{\mat\ins} & \ty{\ins\ins}\tz{\mat\del} & 0 & \ty{\ins\del} & 0 & 0 & \ty{\ins\fin} \tz{\mat\fin}
+\\ \insins & 0 & 0 & \ty{\ins\mat}\tz{\ins\mat} & 0 & \ty{\ins\mat}\tz{\ins\del} & \ty{\ins\ins}\tz{\ins\mat} & \tz{\ins\ins} & \ty{\ins\ins}\tz{\ins\del} & 0 & 0 & \ty{\ins\del} & 0 & \ty{\ins\fin} \tz{\ins\fin}
+\\ \insdel & 0 & 0 & \ty{\ins\mat}\tz{\del\mat} & 0 & \ty{\ins\mat}\tz{\del\del} & \ty{\ins\ins}\tz{\del\mat} & \tz{\del\ins} & \ty{\ins\ins}\tz{\del\del} & 0 & 0 & 0 & \ty{\ins\del} & \ty{\ins\fin} \tz{\del\fin}
+\\ \delsta & 0 & 0 & \ty{\del\mat}\tz{\sta\mat} & 0 & \ty{\del\mat}\tz{\sta\del} & \ty{\del\ins}\tz{\sta\mat} & 0 & \ty{\del\ins}\tz{\sta\del} & \ty{\del\del} & 0 & 0 & 0 & \ty{\del\fin} \tz{\sta\fin}
+\\ \delmat & 0 & 0 & \ty{\del\mat}\tz{\mat\mat} & 0 & \ty{\del\mat}\tz{\mat\del} & \ty{\del\ins}\tz{\mat\mat} & 0 & \ty{\del\ins}\tz{\mat\del} & 0 & \ty{\del\del} & 0 & 0 & \ty{\del\fin} \tz{\mat\fin}
+\\ \delins & 0 & 0 & \ty{\del\mat}\tz{\ins\mat} & 0 & \ty{\del\mat}\tz{\ins\del} & \ty{\del\ins}\tz{\ins\mat} & 0 & \ty{\del\ins}\tz{\ins\del} & 0 & 0 & \ty{\del\del} & 0 & \ty{\del\fin} \tz{\ins\fin}
+\\ \deldel & 0 & 0 & \ty{\del\mat}\tz{\del\mat} & 0 & \ty{\del\mat}\tz{\del\del} & \ty{\del\ins}\tz{\del\mat} & 0 & \ty{\del\ins}\tz{\del\del} & 0 & 0 & 0 & \ty{\del\del} & \ty{\del\fin} \tz{\del\fin}
+\\ \triadend & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0 & 0
+\end{array} \right)
+\end{eqnarray*}
+
+
+\begin{eqnarray*}
+   \states & = & \{ \triadstart,\stains,\matmat,\matins,\matdel,\insmat,\insins,\insdel,\delsta,\delmat,\delins,\deldel,\triadend \} \\
+ \alphabet & = & \{ \mat, \ins, \del \} \\
+ \ymx & = & \conditionalpairmatrix(\insrate,\delrate,\fragext,\ell_1) \\
+ \zmx & = & \conditionalpairmatrix(\insrate,\delrate,\fragext,\ell_2) \\
+ e_k(\omega,\omega') & = & \delta(\omega=\epsilon) \times \left\{ \begin{array}{ll}
+ \delta(\omega'=\mat) & \mbox{if $k = \matmat$} \\
+ \delta(\omega'=\ins) & \mbox{if $k \in \{ \stains,\matins,\insmat,\insins \}$} \\
+ \delta(\omega'=\del) & \mbox{if $k \in \{ \matdel,\delsta,\delmat,\delins,\deldel \}$} \\
+ \delta(\omega'=\epsilon) & \mbox{if $k = \insdel$}
+ \end{array} \right. \\
+ \statetype(k) & = & \left\{ \begin{array}{ll}
+ \sta\ & \mbox{if $k = \triadstart$} \\
+ \fin\ & \mbox{if $k = \triadend$} \\
+ \nul\ & \mbox{if $k = \insdel$} \\
+ \ins\ & \mbox{otherwise}
+ \end{array} \right. \\
+\startstate & = & \triadstart \\
+\finstate & = & \triadend
+\end{eqnarray*}
+
+
+\subsection{Null state elimination}
+\seclabel{NullStateElimination}
+
+Suppose a model
+$M=(\states,\alphabet,{\bf t},{\bf e},\statetype)$
+has transition matrix ${\bf t}$ and state space $\states$.
+We seek to eliminate all states in $\Psi \subset \states$
+by incorporating sums over paths through those states into the transition matrix:
+
+\[
+\eliminatestates((\states,\alphabet,{\bf t},{\bf e},\statetype);\Psi)
+=
+(\states,\alphabet,{\bf t}',{\bf e},\statetype)
+\]
+
+\begin{eqnarray*}
+{\bf t}' & = & {\bf a} + {\bf b}({\bf I}-{\bf d})^{-1}{\bf c} \\
+a_{ij} & = & t_{ij} \delta(i \notin \Psi)\delta(j \notin \Psi) \\
+b_{ij} & = & t_{ij} \delta(i \notin \Psi)\delta(j \in \Psi) \\
+c_{ij} & = & t_{ij} \delta(i \in \Psi)\delta(j \notin \Psi) \\
+d_{ij} & = & t_{ij} \delta(i \in \Psi)\delta(j \in \Psi) 
+\end{eqnarray*}
+
+Note that the returned model still has the same state space $\states$, but transitions
+into the eliminated states now have zero weight; this is purely a notational convenience.
+Implementations can optimize the eliminated states away.
+
+\subsection{Stochastic null state restoration}
+\seclabel{hmmrestore}
+
+Given a state path $\psi$ through an HMM whose null states $\Psi$ have been eliminated,
+we restore them by stochastic traceback, as shown in \algoref{RestoreNull}.
+
+\begin{algorithm}
+\caption{$\restorestates(M,\Psi,\psi)$}
+\alglabel{RestoreNull}
+\algrequire{$M=(\states,\alphabet,{\bf t},{\bf e},\statetype)$, $\Psi \subset \states$, $\psi \in (\states \setminus \Psi)^\ast$}
+\algensure{$\statepath \sim \prob{\statepath|\psi}$}
+\begin{algorithmic}
+\State ${\bf u} \gets {\bf I} + {\bf b}({\bf I} - {\bf d})^{-1}$
+\Comment{${\bf b}$,${\bf d}$ defined in \secref{NullStateElimination}}
+\State $\psi, k \gets \pop(\psi)$ \Comment{$k=\finstate$}
+\State $\statepath \gets [\finstate]$
+\Repeat
+  \State $\psi, i \gets \pop(\psi)$
+  \Repeat
+    \State For $j \in \states$: $q_j \gets u_{ij} t_{jk}$
+    \State Sample $k \sim \mbox{Categorical}({\bf q} / |{\bf q}|)$
+    \State $\statepath \gets [k] + \statepath$
+    \Until{$k = i$}
+  \Until{$k = \startstate$}
+\\
+\Return $\statepath$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Forward algorithm}
+
+\begin{eqnarray*}
+\forwardmatrix(\seqx,\seqy,M) & = & F \\
+\forwardlikelihood(\seqx,\seqy,M) & = & F\left(\len_X,\len_Y, \finstate\right)
+\end{eqnarray*}
+for Pair HMM $M = (\states,\alphabet,{\bf t},{\bf e},\statetype)$ and
+sequences $\seqx,\seqy \in \alphabet^\ast$.
+
+The Forward matrix $F$ has index space $[0,\len_X] \times [0,\len_Y] \times \states$
+and is given by the Forward recursion
+
+\begin{eqnarray*}
+    F(i,j,k) & = & \left\{ \begin{array}{ll}
+\displaystyle
+E_k(i,j)
+\sum_{k' \in \states}
+F(i-\Delta_{\seqx}(k),j-\Delta_{\seqy}(k),k') t_{k'k}
+& \mbox{if $\statetype(k) \neq \sta$} \\
+1 & \mbox{if $\statetype(k) = \sta$ and $i=j=0$} \\
+0 & \mbox{otherwise}
+    \end{array} \right. \\
+E_k(i,j) & = & \left\{
+\begin{array}{ll}
+\displaystyle
+e_k(\seqx_i,\seqy_j) &  \mbox{if $\statetype(k) = \mat$ and $i,j > 0$} \\
+\displaystyle
+e_k(\seqx_i,\epsilon) &  \mbox{if $\statetype(k) = \del$ and $i > 0$} \\
+\displaystyle
+e_k(\epsilon,\seqy_j) &  \mbox{if $\statetype(k) = \ins$ and $j > 0$} \\
+1 & \mbox{if $\statetype(k) = \fin$, $i=\len_X$ and $j=\len_Y$} \\
+0 & \mbox{otherwise}
+\end{array}
+\right.
+\end{eqnarray*}
+where $E_k$ is just a notational wrapper to pick out the correct form of the emission probability.
+
+Practically, this should be implemented in log-space to avoid underflow.
+
+\subsection{Stochastic Forward traceback}
+
+The pseudocode to sample a Pair HMM state path from the posterior distribution given
+a pair of sequences, by stochastic traceback through the Forward matrix,
+is given in \algoref{Traceback}.
+
+\begin{algorithm}
+\caption{$\forwardtraceback(M,F)$}
+\alglabel{Traceback}
+\algrequire{$M=(\states,\alphabet,{\bf t},{\bf e},\statetype)$,
+$F \equiv \forwardmatrix(\seqx,\seqy,M)$}
+\algensure{$\statepath \sim \prob{\mbox{state path}=\statepath|\seqx,\seqy,\states,{\bf t},{\bf e},\statetype}$}
+\begin{algorithmic}
+\State $(i,j) \gets (\len_X,\len_Y)$
+\State $k \gets \finstate$
+\State $\statepath \gets [\finstate]$
+\While{$k \neq \startstate$}
+  \State $(i,j) \gets (i-\Delta_{\seqx}(k),j-\Delta_{\seqy}(k))$
+  \State For $k' \in \states$: $q_{k'} \gets F(i,j,k') t_{k',k}$
+  \State Sample $k' \sim \mbox{Categorical}({\bf q} / |{\bf q}|))$
+  \State $\statepath \gets [k'] + \statepath$
+  \State $k \gets k'$
+\EndWhile
+\\
+\Return $\statepath$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{State path manipulation}
+
+Remove initial $\startstate$ and final $\finstate$ states from a path:
+
+\[
+\strippath(\startstate,\statepath_2 \ldots \statepath_{K-1},\finstate) = (\statepath_2 \ldots \statepath_{K-1})
+\]
+
+\subsection{Single sequence HMM adapter}
+\seclabel{SingleHMM}
+
+\begin{eqnarray*}
+    \singletraceback(\seqy,M) & = & \forwardtraceback(M,F) \\
+    M & = & (\states,\alphabet,{\bf t},{\bf e},\statetype) \\
+    F & = & \forwardmatrix(\epsilon,\seqy,M)
+\end{eqnarray*}
+
+
+\subsection{Sampling the intermediate sequence}
+
+Let $A,C \in \seqalph^\ast$ be sequences on an endpoint-conditioned trajectory
+$A \xrightarrow{\ell_1} B \xrightarrow{\ell_2} C$.
+The pseudocode to generate $N$ {\em a posteriori} samples of the intermediate sequence $B$
+is given in \algoref{SampleIntermediates}.
+
+\newcommand\acsup{{(AC)}}
+\newcommand\absup{{(AB)}}
+\newcommand\bcsup{{(BC)}}
+\newcommand\triadsup{{(ABC)}}
+\newcommand\elimsup{{(A\ast C)}}
+
+\subsubsection{Implementation note: closed-form state elimination}
+\seclabel{ClosedFormStateElim}
+
+The transition matrices ${\bf t}'$ used by $\eliminatestates$
+(\secref{NullStateElimination}),
+and ${\bf u}$ used by $\restorestates$
+(\secref{hmmrestore}),
+which involve matrix inversions in the general case,
+can be expressed in closed form for the special case where the model ($M^\triadsup$) is the triad HMM
+and the eliminated state set ($\{\insdel\}$) consists of that HMM's only null state,
+as is the case in \algoref{SampleIntermediates}.
+Specifically, if ${\bf t}$ is the transition matrix for the triad HMM
+(\secref{triadhmm}), then
+
+\begin{eqnarray*}
+  t'_{ij} & = & \left\{ \begin{array}{ll}
+    t_{ij} + t_{i,\insdel} t_{\insdel,j} / (1 - t_{\insdel,\insdel}) & \mbox{if $i,j \neq \insdel$} \\
+    0 & \mbox{if $i=\insdel$ or $j=\insdel$}
+    \end{array}
+    \right. \\
+  u_{ij} & = & \left\{ \begin{array}{ll}
+    \delta_{ij} + t_{i,\insdel} / (1 - t_{\insdel,\insdel}) & \mbox{if $i \neq \insdel$} \\
+    \delta_{ij} & \mbox{if $i=\insdel$}
+    \end{array}
+    \right. \\
+\end{eqnarray*}
+
+\subsubsection{Implementation note: caching duplicate samples}
+\seclabel{DuplicateSamples}
+
+As written, \algoref{SampleIntermediates} returns a list of sampled intermediate sequences,
+together with their posterior probabilities.
+In practice, for large $N$ and/or small $\ell_1$ or $\ell_2$, it is likely
+that some of the sampled sequences will be duplicates.
+The posterior probabilities for these sequences can be cached;
+in fact (since the order of the returned $B_n$ is irrelevant)
+it would be better to return a dictionary mapping each unique $B$ to its corresponding $p$ and the multiplicity
+with which it was represented in the sampled set.
+
+\begin{algorithm}
+\caption{$\sampleintermediates(A,C,\params,\ell_1,\ell_2,N)$}
+\alglabel{SampleIntermediates}
+\algrequire{$A,C \in \seqalph^\ast$, $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$}
+\algensure{$B_n \sim \prob{B|A,C,\params,\ell_1,\ell_2}$ for $1 \leq n \leq N$}
+\begin{algorithmic}
+\State $M^\absup \gets \conditionalpairhmm(\params,\ell_1)$
+\State $M^\bcsup \gets \conditionalpairhmm(\params,\ell_2)$
+\State $M^\acsup \gets \conditionalpairhmm(\params,\ell_1+\ell_2)$
+\State $M^\triadsup \gets \triadhmm(\params,\ell_1,\ell_2)$
+\State $M^\elimsup \gets \eliminatestates\left(M^\triadsup, \{ \insdel \}\right)$ \Comment{See \sref{ClosedFormStateElim}}
+\State ${\bf U} \gets \exp(\submat \ell_1)$  \Comment{Already computed for $M^\absup$}
+\State ${\bf V} \gets \exp(\submat \ell_2)$  \Comment{Already computed for $M^\bcsup$}
+\State $F^\acsup \gets \forwardmatrix\left(A,C,M^\acsup\right)$
+\State $p^\acsup \gets F^\acsup(\len_A,\len_C,\fin)$  \Comment{$\forwardlikelihood\left(A,C,M^\acsup\right)$}
+\State \For{$n = 1$ to $N$}
+\State $\statepath^\acsup \gets \forwardtraceback\left(M^\acsup,F^\acsup\right)$
+\State $\statepath^\elimsup \gets \singletraceback\left(\strippath\left(\statepath^\acsup\right),M^\elimsup\right)$
+\State $\statepath^\triadsup \gets \restorestates\left(M^\triadsup,\{\insdel\},\statepath^\elimsup\right)$ \Comment{See \sref{ClosedFormStateElim}}
+\State $B_n \gets \epsilon$
+\State $i \gets \len_A$
+\State $j \gets \len_C$
+\While{$\statepath^\triadsup$ is nonempty}
+  \State $k \gets \pop\left(\statepath^\triadsup\right)$
+  \State \If{$k \in \{ \matmat, \insmat, \matdel, \insdel \}$} \Comment{Residue observed at $B$?}
+  \State \If{$k = \matmat$} \Comment{$B$ aligned to $A$ and $C$}
+    \State For $\omega \in \seqalph:\ q_\omega \gets U_{A_i, \omega} V_{\omega, C_j}$
+  \ElsIf{$k = \insmat$} \Comment{$B$ aligned to $C$ only}
+    \State For $\omega \in \seqalph:\ q_\omega \gets \eqm_\omega V_{\omega, C_j}$
+  \ElsIf{$k = \matdel$} \Comment{$B$ aligned to $A$ only}
+    \State For $\omega \in \seqalph:\ q_\omega \gets U_{A_i, \omega}$
+  \Else \Comment{$B$ not aligned to $A$ or $C$}
+    \State ${\bf q} \gets \eqm$
+  \EndIf
+  \State Sample $\omega \sim \mbox{Categorical}({\bf q} / |{\bf q}|)$
+  \State $B_n \gets \omega\ B_n$
+  \EndIf
+\State \If{$k \in \{ \matmat, \matdel, \delsta, \delmat, \delins, \deldel\}$} \Comment{Residue observed at $A$?}
+   \State $i \gets i - 1$
+   \EndIf
+\State \If{$k \in \{ \stains, \matmat, \matins, \insmat, \insins\}$} \Comment{Residue observed at $C$?}
+   \State $j \gets j - 1$
+   \EndIf
+\EndWhile
+\\
+\State $p^\absup \gets \forwardlikelihood(A,B,M^\absup)$
+\State $p^\bcsup \gets \forwardlikelihood(B,C,M^\bcsup)$
+\State $p_n \gets p^\absup p^\bcsup / p^\acsup$
+  \Comment{Cache duplicates; see \sref{DuplicateSamples}}
+\EndFor
+\\
+\Return $[ (B_n, p_n): 1 \leq n \leq N ]$   \Comment{$p_n = \prob{B_n|A,C,\theta,\ell_1,\ell_2}$}
+\end{algorithmic}
+\end{algorithm}
+
+\section{Kullback-Leibler divergence}
+
+For given $A,t,u$ we can evaluate the departure from Markovian behavior using a Kullback-Leibler divergence
+\[
+\mathbb{D}\left[\ M(C|A,t+u)\ ||\ Z(C|A,t,u)\ \right]
+=
+\sum_C M(C|A,t+u) \log
+\frac{M(C|A,t+u)}{Z(C|A,t,u)}
+\]
+(We could also introduce a prior over $A$ and sum over that, for the full joint distribution over $A$ and $C$.)
+
+The KL divergence illustrates why it might be useful to be able to compute, or estimate, $Z$.
+(This does not address the problem of summing over $C$, or $A$ if we include that in the KL-divergence;
+those infinite sums would presumably also need to be approximated by finite samples, e.g. the minibatches from the training data.)
+
+
+\section{Discussion}
+
+It is still unclear how to operationalize this as a regularizer term in a training loss.
+If we simply used minibatches from the training data as an empirical sample from $\prob{A,C}$ (presumably also using some heuristic to choose $t,u$),
+and added the (sample-approximated) KL-divergence into the negative log-likelihood (NLL) loss,
+then it seems to me that the $\log M(C|A,t+u)$ term would cancel out the corresponding NLL term in the loss,
+and we'd be left minimizing $\log Z$, which seems wrong.
+Some ideas to fix that:
+\begin{itemize}
+    \item Attach a hyperparameter weight $\lambda < 1$ to the KL-divergence penalty, then it won't cancel entirely.
+    \item Make the KL-divergence minibatch different from the NLL minibatch.
+    \item Stop gradients for the $\log M$ term in the KL-divergence (c.f. temporal difference reinforcement learning). This is not exactly addressing the above-identified problem but might help if the loss encourages training to ``chase its own tail''.
+    \item Abandon KL-divergence and simply add a regularizer that penalizes differences between $M$ and $Z$ in the minibatch; something like $\lambda | \log M(C|A,t+u) - \log Z(C|A,t,u) |$. (The only difference between this and a minibatch-approximation to the KL-divergence is that we're taking the absolute value of the log-odds ratio, so I'm not sure it will do much, but I suppose it might help as the $\log M$ terms no longer have opposing signs in all cases: when $Z>M$ then this regularizer will, like the NLL, be rewarding {\em increases} in $\log M$.)
+\end{itemize}
+
+\end{document}

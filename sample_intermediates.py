@@ -5,10 +5,11 @@ sample_intermediates.py
 Sample intermediate sequences B for an endpoint-conditioned evolutionary
 trajectory A -ell1-> B -ell2-> C under the TKF92 (or TKF91) model.
 
-The sampler uses importance sampling: B is drawn from the posterior
-distribution implied by a TKF92 pair HMM, and each sample is weighted by
-    p(B|A,C) = p(B|A) * p(C|B) / p(C|A)
-The weights are computed in log-space to avoid underflow.
+Each B is drawn exactly from the posterior distribution over intermediate
+sequences implied by the TKF92 model. The returned log-probabilities
+    log p(B|A,C) = log p(B|A) + log p(C|B) - log p(C|A)
+can be used as importance weights when estimating expectations over B.
+All likelihood calculations are performed in log-space to avoid underflow.
 
 SUBSTITUTION MODELS
 -------------------
@@ -994,7 +995,20 @@ def build_parser():
         default='jc',
         help='Substitution model (default: jc).')
     model_group.add_argument('--model-file', metavar='PATH',
-        help='Path to rate-matrix file (required when --model file).')
+        help=(
+            'Path to rate-matrix file (required when --model file). '
+            'Format: whitespace-delimited n x n matrix of off-diagonal rates, '
+            'one row per line. The diagonal is ignored and recomputed so that '
+            'rows sum to zero. The stationary distribution is deduced '
+            'automatically by solving pi Q = 0. '
+            'Lines beginning with "#" are treated as comments. '
+            'An optional comment of the form "# alphabet ACGT" sets the '
+            'alphabet; otherwise DNA (n=4) or amino-acid (n=20) alphabets are '
+            'inferred from the matrix size, and integer labels are used for '
+            'any other size. '
+            'Example 4x4 matrix (Jukes-Cantor-like): '
+            '"0 1 1 1 / 1 0 1 1 / 1 1 0 1 / 1 1 1 0" (each "/" is a newline).'
+        ))
     model_group.add_argument('--pi', type=float, nargs='+', metavar='FREQ',
         help='Stationary frequencies for F81 (4 values, need not sum to 1).')
     model_group.add_argument('--k2p-kappa', type=float, default=2.0,

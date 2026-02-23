@@ -666,7 +666,7 @@ with which it was represented in the sampled set.
 \State ${\bf U} \gets \exp(\submat \ell_1)$  \Comment{Already computed for $M^\absup$}
 \State ${\bf V} \gets \exp(\submat \ell_2)$  \Comment{Already computed for $M^\bcsup$}
 \State $F^\acsup \gets \forwardmatrix\left(A,C,M^\acsup\right)$
-\State $p^\acsup \gets F^\acsup(\len_A,\len_C,\fin)$  \Comment{$\forwardlikelihood\left(A,C,M^\acsup\right)$}
+\State $p^\acsup \gets F^\acsup(\len_A,\len_C,\triadend)$  \Comment{$\forwardlikelihood\left(A,C,M^\acsup\right)$}
 \State \For{$n = 1$ to $N$}
 \State $\statepath^\acsup \gets \forwardtraceback\left(M^\acsup,F^\acsup\right)$
 \State $\statepath^\abcsup \gets \restorestates\left(M^\abcsup,\{\insdel\},\statepath^\acsup\right)$ \Comment{See \sref{ClosedFormStateElim}}
@@ -698,11 +698,11 @@ with which it was represented in the sampled set.
 \\
 \State $p^\absup \gets \forwardlikelihood(A,B,M^\absup)$
 \State $p^\bcsup \gets \forwardlikelihood(B,C,M^\bcsup)$
-\State $p_n \gets p^\absup p^\bcsup / p^\acsup$
-  \Comment{Cache duplicates; see \sref{DuplicateSamples}}
+\State $p_n \gets p^\absup p^\bcsup / p^\acsup$  \Comment{$p_n = \prob{B_n|A,C,\theta,\ell_1,\ell_2}$}
 \EndFor
 \\
-\Return $[ (B_n, p_n): 1 \leq n \leq N ]$   \Comment{$p_n = \prob{B_n|A,C,\theta,\ell_1,\ell_2}$}
+\Return $[ (B_n, p_n): 1 \leq n \leq N ]$
+\Comment{Can cache duplicates; see \sref{DuplicateSamples}}
 \end{algorithmic}
 \end{algorithm}
 

@@ -1047,6 +1047,10 @@ def main():
     parser = build_parser()
     args   = parser.parse_args()
 
+    # --- Random seed ---
+    if args.seed is not None:
+        np.random.seed(args.seed)
+
     # --- Integration tests ---
     if args.test_all or args.test_dna:
         run_integration_test_dna()
@@ -1056,10 +1060,6 @@ def main():
         run_integration_test_k2p()
     if args.test_all or args.test_dna or args.test_aa or args.test_k2p:
         sys.exit(0)
-
-    # --- Random seed ---
-    if args.seed is not None:
-        np.random.seed(args.seed)
 
     # --- Build substitution model ---
     if args.model == 'jc':

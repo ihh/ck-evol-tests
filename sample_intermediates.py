@@ -1039,6 +1039,11 @@ def build_parser():
     out_group = parser.add_argument_group('Output')
     out_group.add_argument('--top', type=int, default=None, metavar='K',
         help='Print only the top K results by count (default: print all).')
+    out_group.add_argument('--json', action='store_true',
+        help='Emit structured JSON output instead of human-readable text.')
+    out_group.add_argument('--json-model', action='store_true',
+        help='Include model parameters (lam, mu, r, alphabet, Q, pi) in JSON output.'
+             ' Implies --json.')
 
     return parser
 
@@ -1123,13 +1128,6 @@ def main():
         parser.error('r must be in [0, 1).')
 
     # --- Run sampler ---
-    print(f"# Model  : {args.model}")
-    print(f"# lam={args.lam}  mu={args.mu}  r={args.r}")
-    print(f"# ell1={args.ell1}  ell2={args.ell2}  N={args.num_samples}")
-    print(f"# A = {seq_A_str}")
-    print(f"# C = {seq_C_str}")
-    print()
-
     results = sample_intermediates(A, C, params, args.ell1, args.ell2, args.num_samples)
 
     # --- Print results ---
@@ -1137,15 +1135,48 @@ def main():
     if args.top is not None:
         sorted_results = sorted_results[:args.top]
 
-    print(f"{'B':<25}  {'log_p':>10}  {'p':>12}  {'count':>7}")
-    print('-' * 60)
-    for B_tuple, (log_p, count) in sorted_results:
-        B_str = ''.join(alphabet[r] for r in B_tuple)
-        p_val = np.exp(log_p)
-        print(f"{B_str:<25}  {log_p:>10.4f}  {p_val:>12.4e}  {count:>7}")
-
-    total = sum(count for _, count in results.values())
-    print(f"\n# Total samples: {total}   Unique B: {len(results)}")
+    if args.json or args.json_model:
+        import json
+        out = {
+            'A':    seq_A_str,
+            'C':    seq_C_str,
+            'N':    args.num_samples,
+            'ell1': args.ell1,
+            'ell2': args.ell2,
+            'samples': [
+                {
+                    'B':     ''.join(alphabet[r] for r in B_tuple),
+                    'log_p': float(log_p),
+                    'count': count,
+                }
+                for B_tuple, (log_p, count) in sorted_results
+            ],
+        }
+        if args.json_model:
+            out['model'] = {
+                'lam':      params.lam,
+                'mu':       params.mu,
+                'r':        params.r,
+                'alphabet': params.alphabet,
+                'Q':        params.Q.tolist(),
+                'pi':       params.pi.tolist(),
+            }
+        print(json.dumps(out, indent=2))
+    else:
+        print(f"# Model  : {args.model}")
+        print(f"# lam={args.lam}  mu={args.mu}  r={args.r}")
+        print(f"# ell1={args.ell1}  ell2={args.ell2}  N={args.num_samples}")
+        print(f"# A = {seq_A_str}")
+        print(f"# C = {seq_C_str}")
+        print()
+        print(f"{'B':<25}  {'log_p':>10}  {'p':>12}  {'count':>7}")
+        print('-' * 60)
+        for B_tuple, (log_p, count) in sorted_results:
+            B_str = ''.join(alphabet[r] for r in B_tuple)
+            p_val = np.exp(log_p)
+            print(f"{B_str:<25}  {log_p:>10.4f}  {p_val:>12.4e}  {count:>7}")
+        total = sum(count for _, count in results.values())
+        print(f"\n# Total samples: {total}   Unique B: {len(results)}")
 
 
 if __name__ == '__main__':

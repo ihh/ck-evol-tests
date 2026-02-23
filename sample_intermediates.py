@@ -375,40 +375,38 @@ SS, sI, MM, mI, MD, IM, iI, ID, Ds, Dm, Di, Dd, EE = range(13)
 N_TRIAD_STATES = 13
 TRIAD_NAMES = ['SS','sI','MM','mI','MD','IM','iI','ID','Ds','Dm','Di','Dd','EE']
 
-# State types for single-sequence usage: S=0, I=2, N(null)=5, E=4
-NULL_TYPE = 5
+NULL_TYPE = 5   # null state type code (beyond S=0,M=1,I=2,D=3,E=4)
+
+# Triad HMM is a pair HMM with A as X (ancestor) and C as Y (descendant),
+# with B marginalised out as a latent sequence.
+#
+# State type assignments (from the spec):
+#   MM              -> M  (consumes both A and C)
+#   sI, mI, IM, iI  -> I  (consume C only; B inserts residue observed in C)
+#   MD, Ds, Dm, Di, Dd -> D  (consume A only; B residue deleted before C)
+#   ID              -> N  (null; B inserts then deletes — neither A nor C consumed)
+#   SS -> S,  EE -> E
 TRIAD_STATE_TYPES = [
-    S_ST,    # SS
-    I_ST,    # sI
-    I_ST,    # MM
-    I_ST,    # mI
-    I_ST,    # MD
-    I_ST,    # IM
-    I_ST,    # iI
+    S_ST,      # SS
+    I_ST,      # sI
+    M_ST,      # MM
+    I_ST,      # mI
+    D_ST,      # MD
+    I_ST,      # IM
+    I_ST,      # iI
     NULL_TYPE, # ID  (null)
-    I_ST,    # Ds
-    I_ST,    # Dm
-    I_ST,    # Di
-    I_ST,    # Dd
-    E_ST,    # EE
+    D_ST,      # Ds
+    D_ST,      # Dm
+    D_ST,      # Di
+    D_ST,      # Dd
+    E_ST,      # EE
 ]
-
-# Which triad states emit each symbol in {M=0, I=1, D=2}
-TRIAD_EMIT_SYM = {
-    MM: 0,
-    sI: 1, mI: 1, IM: 1, iI: 1,
-    MD: 2, Ds: 2, Dm: 2, Di: 2, Dd: 2,
-    ID: None,  # null — emits nothing
-}
-
-# Map cond-pair-HMM states {M,I,D} -> triad alphabet symbol
-AC_EMIT = {M_ST: 0, I_ST: 1, D_ST: 2}
 
 # Which triad states produce a residue at B?
 B_RESIDUE_STATES = {MM, IM, MD, ID}
-# Which consume an A residue?
+# Which consume an A residue?  (M or D in pair-HMM sense: consume X=A)
 A_CONSUME = {MM, MD, Ds, Dm, Di, Dd}
-# Which consume a C residue?
+# Which consume a C residue?  (M or I in pair-HMM sense: consume Y=C)
 C_CONSUME = {sI, MM, mI, IM, iI}
 
 
@@ -659,83 +657,33 @@ def log_likelihood_cond(x, y, t, U, pi):
 
 
 # ===========================================================================
-# Triad HMM single-sequence log-forward / traceback
+# Triad HMM pair log-forward (emission function)
 # ===========================================================================
 
-def log_forward_triad(ac_path_labels, log_t_elim):
+def make_triad_emit_fn(UV, pi):
     """
-    Single-sequence log-space forward for the null-eliminated triad HMM.
+    Log-emission function for the triad pair HMM (A=X, C=Y, B latent).
 
-    ac_path_labels : list of symbols in {0=M, 1=I, 2=D} from the AC path
-                     (start/end states already stripped).
-    log_t_elim     : 13x13 log transition matrix (ID row/col = -inf).
-
-    Returns log F[j, k] for j in 0..L, k in 0..12.
+    Emissions marginalise over the latent B residue:
+      MM:   exp(Q*(l1+l2))_{A_i, C_j}          (match: both A and C consumed)
+      I states (sI,mI,IM,iI): pi_{C_j}          (insert: C consumed, B->C marginal)
+      D states (MD,Ds,Dm,Di,Dd): 1              (delete: A consumed, emission=1)
+      ID:   null — handled by state elimination
     """
-    L = len(ac_path_labels)
-    logF = np.full((L+1, N_TRIAD_STATES), LOG0)
-    logF[0, SS] = 0.0
+    log_UV = _log_safe(UV)
+    log_pi = _log_safe(pi)
 
-    for j in range(L+1):
-        for k in range(N_TRIAD_STATES):
-            st = TRIAD_STATE_TYPES[k]
-            if st == S_ST or st == NULL_TYPE:
-                continue
-
-            if st == E_ST:
-                if j != L:
-                    continue
-                log_terms = logF[j, :] + log_t_elim[:, k]
-                max_v = log_terms.max()
-                if max_v == LOG0:
-                    continue
-                logF[j, k] = max_v + np.log(np.exp(log_terms - max_v).sum())
-                continue
-
-            # I_ST: emits one symbol
-            if j == 0:
-                continue
-            sym = ac_path_labels[j-1]
-            if TRIAD_EMIT_SYM.get(k) != sym:
-                continue
-            log_terms = logF[j-1, :] + log_t_elim[:, k]
-            max_v = log_terms.max()
-            if max_v == LOG0:
-                continue
-            logF[j, k] = max_v + np.log(np.exp(log_terms - max_v).sum())
-
-    return logF
-
-
-def triad_traceback_log(logF, log_t_elim, ac_path_labels):
-    """Stochastic traceback through log-space triad forward matrix."""
-    L = len(ac_path_labels)
-    j = L
-    k = EE
-    path = [k]
-
-    while True:
+    def log_emit_fn(k, xi, yj):
         st = TRIAD_STATE_TYPES[k]
-        dj = 1 if st == I_ST else 0
-        pj = j - dj
+        if st == M_ST:          # MM: exp(Q(l1+l2))_{A_i, C_j}
+            return log_UV[xi, yj]
+        elif st == I_ST:        # insert states: pi_{C_j}
+            return log_pi[yj]
+        elif st == D_ST:        # delete states: emission = 1
+            return 0.0
+        return 0.0
+    return log_emit_fn
 
-        log_q = logF[pj, :] + log_t_elim[:, k]
-        max_lq = log_q.max()
-        if max_lq == LOG0:
-            break
-        q = np.exp(log_q - max_lq)
-        q_sum = q.sum()
-        if q_sum == 0:
-            break
-        k_prev = np.random.choice(N_TRIAD_STATES, p=q / q_sum)
-        path.append(k_prev)
-        j = pj
-        k = k_prev
-        if TRIAD_STATE_TYPES[k] == S_ST:
-            break
-
-    path.reverse()
-    return path
 
 
 # ===========================================================================
@@ -778,28 +726,34 @@ def sample_intermediates(A, C, params, ell1, ell2, N):
     A, C : sequences as lists of integer alphabet indices.
     N    : number of samples.
 
+    The triad HMM is used directly as a pair HMM with A=X and C=Y,
+    with B marginalised out via the emission function.  The null state
+    ID is eliminated before the forward pass; null states are then
+    stochastically restored during traceback.
+
     Returns dict: B_tuple -> (log_p, count)
       where log_p = log P(B|A,C,params,ell1,ell2) and count is multiplicity.
     """
-    U = subst_matrix(params, ell1)
-    V = subst_matrix(params, ell2)
+    U  = subst_matrix(params, ell1)
+    V  = subst_matrix(params, ell2)
     UV = subst_matrix(params, ell1 + ell2)
 
     t_AB  = cond_pair_matrix(params, ell1)
     t_BC  = cond_pair_matrix(params, ell2)
-    t_AC  = cond_pair_matrix(params, ell1 + ell2)
     t_ABC = triad_transition_matrix(params, ell1, ell2)
-    t_elim  = eliminate_null_state(t_ABC)
-    u_mat   = make_u_matrix(t_ABC)
+    t_elim = eliminate_null_state(t_ABC)
+    u_mat  = make_u_matrix(t_ABC)
 
     log_t_AB   = _log_safe(t_AB)
     log_t_BC   = _log_safe(t_BC)
     log_t_elim = _log_safe(t_elim)
 
-    # Log forward matrix for A->C (reused across all N samples)
-    logF_AC    = log_forward_cond(A, C, t_AC, UV, params.pi)
-    log_t_AC   = _log_safe(t_AC)
-    log_p_AC   = logF_AC[len(A), len(C), E_ST]
+    # Emission function and log forward matrix for triad HMM against (A, C).
+    # Reused across all N samples.
+    log_emit_fn = make_triad_emit_fn(UV, params.pi)
+    logF_AC = log_forward_pair(A, C, log_t_elim, log_emit_fn,
+                               N_TRIAD_STATES, TRIAD_STATE_TYPES)
+    log_p_AC = logF_AC[len(A), len(C), EE]
 
     if log_p_AC == LOG0:
         raise ValueError("log P(C|A) = -inf: sequences are incompatible with model.")
@@ -807,23 +761,15 @@ def sample_intermediates(A, C, params, ell1, ell2, N):
     results = defaultdict(lambda: [LOG0, 0])   # B -> [log_p, count]
 
     for _ in range(N):
-        # 1. Sample A->C alignment path
-        ac_path = forward_traceback_log(logF_AC, log_t_AC, COND_STATE_TYPES, A, C)
+        # 1. Sample path through null-eliminated triad HMM (pair forward traceback)
+        path_elim = forward_traceback_log(logF_AC, log_t_elim,
+                                          TRIAD_STATE_TYPES, A, C)
 
-        # 2. Strip S/E; map to triad alphabet symbols
-        ac_inner  = [s for s in ac_path if COND_STATE_TYPES[s] not in (S_ST, E_ST)]
-        ac_labels = [AC_EMIT[s] for s in ac_inner]
+        # 2. Restore null (ID) states stochastically
+        triad_path = restore_null_states(path_elim, t_ABC, u_mat)
 
-        # 3. Log-forward through null-eliminated triad HMM
-        logF_triad = log_forward_triad(ac_labels, log_t_elim)
-
-        # 4. Traceback through triad HMM
-        triad_path_elim = triad_traceback_log(logF_triad, log_t_elim, ac_labels)
-
-        # 5. Restore null (ID) states
-        triad_path = restore_null_states(triad_path_elim, t_ABC, u_mat)
-
-        # 6. Sample B residues
+        # 3. Sample B residues by traversing triad path front-to-back,
+        #    prepending each sampled residue so B is built in correct order.
         B  = []
         ai = len(A) - 1
         ci = len(C) - 1
@@ -840,10 +786,9 @@ def sample_intermediates(A, C, params, ell1, ell2, N):
                 else:  # ID
                     q = params.pi.copy()
                 q_sum = q.sum()
-                if q_sum > 0:
-                    omega = np.random.choice(params.n_alpha, p=q / q_sum)
-                else:
-                    omega = np.random.choice(params.n_alpha, p=params.pi)
+                omega = (np.random.choice(params.n_alpha, p=q / q_sum)
+                         if q_sum > 0
+                         else np.random.choice(params.n_alpha, p=params.pi))
                 B.insert(0, omega)
             if k in A_CONSUME:
                 ai -= 1
@@ -852,7 +797,7 @@ def sample_intermediates(A, C, params, ell1, ell2, N):
 
         B_tuple = tuple(B)
 
-        # 7. Importance weight (cache on first occurrence of this B)
+        # 4. Importance weight (cached on first occurrence of this B)
         if results[B_tuple][1] == 0:
             log_p_AB = log_likelihood_cond(A, B, t_AB, U, params.pi)
             log_p_BC = log_likelihood_cond(B, C, t_BC, V, params.pi)

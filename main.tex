@@ -353,6 +353,8 @@ This is the same as the joint pair HMM (\secref{tkfjoint}),
 except the transition matrix is as given in \secref{tkfcondmatrix}
 and the emission probabilities omit the $\eqm_\omega$ term for ancestral residues.
 
+Since it's conditionally normalized, it is technically a finite-state transducer rather than a Pair HMM.
+
 \begin{eqnarray*}
    \states & = & \smide \\
    {\bf t} & = & \conditionalpairmatrix(\insrate,\delrate,\fragext,\ell) \\
@@ -381,7 +383,8 @@ where $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$.
 This is the HMM for the conditional distribution $\prob{B,C|A,\theta,\ell_1,\ell_2}$, reflecting two generations
 of evolutionary drift: $A \xrightarrow{\ell_1} B \xrightarrow{\ell_2} C$.
 Technically it is a three-sequence HMM, but we will treat $B$ as unobserved.
-As such, we represent it as a Pair HMM that outputs to $A$ and $C$.
+As such, we represent it as a conditional Pair HMM (or, more precisely, a finite-state transducer)
+that inputs $A$ and outputs $C$.
 
 Each state can be considered a tuple comprising two states from the conditional pair HMM
 of \secref{tkfcond}:

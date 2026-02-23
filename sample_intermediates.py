@@ -70,6 +70,11 @@ USAGE EXAMPLES
       --ell1 0.5 --ell2 0.5 --N 5 \\
       --A ACDEFGHIKLMNPQRSTVWY --C ACDEFGHIKLMNPQRSTVWY
 
+  # ELVIS->LIVES: quite probably because of ELVES:
+  python sample_intermediates.py \\
+      --model lg --N 10000 --top 5 \\
+      --A ELVIS --C LIVES
+
   # Custom rate matrix from file:
   python sample_intermediates.py \\
       --model file --model-file mymodel.txt \\

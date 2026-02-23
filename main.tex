@@ -165,7 +165,6 @@ the expected (Markov-consistent) distribution $Z$ and the computed model distrib
 
 \newcommand\states{\Phi}
 \newcommand\alphabet{\Omega}
-\newcommand\seqalph{\Sigma}
 \newcommand\statetype{\tau}
 
 \newcommand\statepath{\phi}
@@ -183,8 +182,6 @@ the expected (Markov-consistent) distribution $Z$ and the computed model distrib
 \newcommand\forwardmatrix{{\tt ForwardMatrix}}
 \newcommand\forwardlikelihood{{\tt ForwardLikelihood}}
 \newcommand\forwardtraceback{{\tt ForwardTraceback}}
-\newcommand\singletraceback{{\tt SingleTraceback}}
-\newcommand\strippath{{\tt StripPath}}
 \newcommand\sampleintermediates{{\tt SampleIntermediates}}
 
 \newcommand\pop{{\tt pop}}
@@ -293,13 +290,13 @@ The TKF92 model reduces to the TKF91 model when $\fragext=0$.
 \seclabel{tkfjoint}
 
 \[
-\jointpairhmm(\params,\ell) = (\states,\seqalph,{\bf t},{\bf e},\statetype)
+\jointpairhmm(\params,\ell) = (\states,\alphabet,{\bf t},{\bf e},\statetype)
 \]
 where $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$.
 
 This is the full description of the HMM whose transition matrix
 is given in \secref{tkfjointmatrix}.
-Here $\seqalph$ denotes the sequence alphabet, i.e. the index space of the substitution model $(\submat,\eqm)$.
+Here $\alphabet$ denotes the sequence alphabet, i.e. the index space of the substitution model $(\submat,\eqm)$.
 
 We do not actually use this Pair HMM, or its transition matrix.
 It is provided only to make sense of the conditional transition matrix presented in
@@ -311,7 +308,7 @@ It is provided only to make sense of the conditional transition matrix presented
    e_\mat(\omega,\omega') & = &
    \left\{
    \begin{array}{ll}
-   \eqm_{\omega} \exp(\submat \ell)_{\omega \omega'} & \mbox{if $\omega,\omega' \in \seqalph$}
+   \eqm_{\omega} \exp(\submat \ell)_{\omega \omega'} & \mbox{if $\omega,\omega' \in \alphabet$}
    \\ 0 & \mbox{otherwise}
    \end{array}
    \right. \\
@@ -348,7 +345,7 @@ ancestral sequence lengths
 \seclabel{tkfcond}
 
 \[
-\conditionalpairhmm(\params,\ell) = (\states,\seqalph,{\bf t},{\bf e},\statetype)
+\conditionalpairhmm(\params,\ell) = (\states,\alphabet,{\bf t},{\bf e},\statetype)
 \]
 where $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$.
 
@@ -362,7 +359,7 @@ and the emission probabilities omit the $\eqm_\omega$ term for ancestral residue
    e_\mat(\omega,\omega') & = &
    \left\{
    \begin{array}{ll}
-   \exp(\submat \ell)_{\omega \omega'} & \mbox{if $\omega,\omega' \in \seqalph$}
+   \exp(\submat \ell)_{\omega \omega'} & \mbox{if $\omega,\omega' \in \alphabet$}
    \\ 0 & \mbox{otherwise}
    \end{array}
    \right. \\
@@ -383,16 +380,8 @@ where $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$.
 
 This is the HMM for the conditional distribution $\prob{B,C|A,\theta,\ell_1,\ell_2}$, reflecting two generations
 of evolutionary drift: $A \xrightarrow{\ell_1} B \xrightarrow{\ell_2} C$.
-Technically it is a three-sequence HMM, but we will always use it conditioned on having
-sampled a state path from the posterior distribution of the pair HMM
-in \secref{tkfcond}, modeling the trajectory
-$A \xrightarrow{\ell_1 + \ell_2} C$.
-As such, we represent it as a single-sequence HMM whose output is
-a sequence of $\{\mat,\ins,\del\}$ state labels.
-(To avoid writing out a separate set of definitions and algorithms for single-sequence HMMs,
-we use the fact that a single-sequence HMM is a special case of a pair HMM,
-and simply constrain the first sequence to be empty; a wrapper function for this purpose
-is defined in \secref{SingleHMM}.)
+Technically it is a three-sequence HMM, but we will treat $B$ as unobserved.
+As such, we represent it as a Pair HMM that outputs to $A$ and $C$.
 
 Each state can be considered a tuple comprising two states from the conditional pair HMM
 of \secref{tkfcond}:
@@ -463,20 +452,24 @@ In detail,
 
 \begin{eqnarray*}
    \states & = & \{ \triadstart,\stains,\matmat,\matins,\matdel,\insmat,\insins,\insdel,\delsta,\delmat,\delins,\deldel,\triadend \} \\
- \alphabet & = & \{ \mat, \ins, \del \} \\
  \ymx & = & \conditionalpairmatrix(\insrate,\delrate,\fragext,\ell_1) \\
  \zmx & = & \conditionalpairmatrix(\insrate,\delrate,\fragext,\ell_2) \\
- e_k(\omega,\omega') & = & \delta(\omega=\epsilon) \times \left\{ \begin{array}{ll}
- \delta(\omega'=\mat) & \mbox{if $k = \matmat$} \\
- \delta(\omega'=\ins) & \mbox{if $k \in \{ \stains,\matins,\insmat,\insins \}$} \\
- \delta(\omega'=\del) & \mbox{if $k \in \{ \matdel,\delsta,\delmat,\delins,\deldel \}$} \\
- \delta(\omega'=\epsilon) & \mbox{if $k = \insdel$}
- \end{array} \right. \\
+e_k(\omega,\omega') & = &
+   \left\{
+   \begin{array}{ll}
+   \exp(\submat (\ell_1 + \ell_2))_{\omega \omega'} & \mbox{if $k = \matmat$ and $\omega,\omega' \in \alphabet$} \\
+   \eqm_{\omega'} & \mbox{if $k \in \{ \stains, \matins, \insmat, \insins \}$, $\omega=\epsilon$, and $\omega' \in \alphabet$} \\
+   1 & \mbox{if $k \in \{ \matdel, \delsta, \delmat, \delins, \deldel \}$, $\omega \in \alphabet$, and $\omega' = \epsilon$} \\
+   0 & \mbox{otherwise}
+   \end{array}
+   \right. \\
  \statetype(k) & = & \left\{ \begin{array}{ll}
  \sta\ & \mbox{if $k = \triadstart$} \\
- \fin\ & \mbox{if $k = \triadend$} \\
+ \mat\ & \mbox{if $k = \matmat$} \\
+ \ins\ & \mbox{if $k \in \{ \stains, \matins, \insmat, \insins \}$} \\
+ \del\ & \mbox{if $k \in \{ \matdel, \delsta, \delmat, \delins, \deldel \}$} \\
  \nul\ & \mbox{if $k = \insdel$} \\
- \ins\ & \mbox{otherwise}
+ \fin\ & \mbox{if $k = \triadend$}
  \end{array} \right. \\
 \startstate & = & \triadstart \\
 \finstate & = & \triadend
@@ -606,27 +599,9 @@ $F \equiv \forwardmatrix(\seqx,\seqy,M)$}
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{State path manipulation}
-
-Remove initial $\startstate$ and final $\finstate$ states from a path:
-
-\[
-\strippath(\startstate,\statepath_2 \ldots \statepath_{K-1},\finstate) = (\statepath_2 \ldots \statepath_{K-1})
-\]
-
-\subsection{Single sequence HMM adapter}
-\seclabel{SingleHMM}
-
-\begin{eqnarray*}
-    \singletraceback(\seqy,M) & = & \forwardtraceback(M,F) \\
-    M & = & (\states,\alphabet,{\bf t},{\bf e},\statetype) \\
-    F & = & \forwardmatrix(\epsilon,\seqy,M)
-\end{eqnarray*}
-
-
 \subsection{Sampling the intermediate sequence}
 
-Let $A,C \in \seqalph^\ast$ be sequences on an endpoint-conditioned trajectory
+Let $A,C \in \alphabet^\ast$ be sequences on an endpoint-conditioned trajectory
 $A \xrightarrow{\ell_1} B \xrightarrow{\ell_2} C$.
 The pseudocode to generate $N$ {\em a posteriori} samples of the intermediate sequence $B$
 is given in \algoref{SampleIntermediates}.
@@ -634,8 +609,7 @@ is given in \algoref{SampleIntermediates}.
 \newcommand\acsup{{(AC)}}
 \newcommand\absup{{(AB)}}
 \newcommand\bcsup{{(BC)}}
-\newcommand\triadsup{{(ABC)}}
-\newcommand\elimsup{{(A\ast C)}}
+\newcommand\abcsup{{(ABC)}}
 
 \subsubsection{Implementation note: closed-form state elimination}
 \seclabel{ClosedFormStateElim}
@@ -645,7 +619,7 @@ The transition matrices ${\bf t}'$ used by $\eliminatestates$
 and ${\bf u}$ used by $\restorestates$
 (\secref{hmmrestore}),
 which involve matrix inversions in the general case,
-can be expressed in closed form for the special case where the model ($M^\triadsup$) is the triad HMM
+can be expressed in closed form for the special case where the model ($M^\abcsup$) is the triad HMM
 and the eliminated state set ($\{\insdel\}$) consists of that HMM's only null state,
 as is the case in \algoref{SampleIntermediates}.
 Specifically, if ${\bf t}$ is the transition matrix for the triad HMM
@@ -679,34 +653,32 @@ with which it was represented in the sampled set.
 \begin{algorithm}
 \caption{$\sampleintermediates(A,C,\params,\ell_1,\ell_2,N)$}
 \alglabel{SampleIntermediates}
-\algrequire{$A,C \in \seqalph^\ast$, $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$}
+\algrequire{$A,C \in \alphabet^\ast$, $\params = (\insrate,\delrate,\fragext,\submat,\eqm)$}
 \algensure{$B_n \sim \prob{B|A,C,\params,\ell_1,\ell_2}$ for $1 \leq n \leq N$}
 \begin{algorithmic}
 \State $M^\absup \gets \conditionalpairhmm(\params,\ell_1)$
 \State $M^\bcsup \gets \conditionalpairhmm(\params,\ell_2)$
-\State $M^\acsup \gets \conditionalpairhmm(\params,\ell_1+\ell_2)$
-\State $M^\triadsup \gets \triadhmm(\params,\ell_1,\ell_2)$
-\State $M^\elimsup \gets \eliminatestates\left(M^\triadsup, \{ \insdel \}\right)$ \Comment{See \sref{ClosedFormStateElim}}
+\State $M^\abcsup \gets \triadhmm(\params,\ell_1,\ell_2)$
+\State $M^\acsup \gets \eliminatestates\left(M^\abcsup, \{ \insdel \}\right)$ \Comment{See \sref{ClosedFormStateElim}}
 \State ${\bf U} \gets \exp(\submat \ell_1)$  \Comment{Already computed for $M^\absup$}
 \State ${\bf V} \gets \exp(\submat \ell_2)$  \Comment{Already computed for $M^\bcsup$}
 \State $F^\acsup \gets \forwardmatrix\left(A,C,M^\acsup\right)$
 \State $p^\acsup \gets F^\acsup(\len_A,\len_C,\fin)$  \Comment{$\forwardlikelihood\left(A,C,M^\acsup\right)$}
 \State \For{$n = 1$ to $N$}
 \State $\statepath^\acsup \gets \forwardtraceback\left(M^\acsup,F^\acsup\right)$
-\State $\statepath^\elimsup \gets \singletraceback\left(\strippath\left(\statepath^\acsup\right),M^\elimsup\right)$
-\State $\statepath^\triadsup \gets \restorestates\left(M^\triadsup,\{\insdel\},\statepath^\elimsup\right)$ \Comment{See \sref{ClosedFormStateElim}}
+\State $\statepath^\abcsup \gets \restorestates\left(M^\abcsup,\{\insdel\},\statepath^\acsup\right)$ \Comment{See \sref{ClosedFormStateElim}}
 \State $B_n \gets \epsilon$
 \State $i \gets \len_A$
 \State $j \gets \len_C$
-\While{$\statepath^\triadsup$ is nonempty}
-  \State $k \gets \pop\left(\statepath^\triadsup\right)$
+\While{$\statepath^\abcsup$ is nonempty}
+  \State $k \gets \pop\left(\statepath^\abcsup\right)$
   \State \If{$k \in \{ \matmat, \insmat, \matdel, \insdel \}$} \Comment{Residue observed at $B$?}
   \State \If{$k = \matmat$} \Comment{$B$ aligned to $A$ and $C$}
-    \State For $\omega \in \seqalph:\ q_\omega \gets U_{A_i, \omega} V_{\omega, C_j}$
+    \State For $\omega \in \alphabet:\ q_\omega \gets U_{A_i, \omega} V_{\omega, C_j}$
   \ElsIf{$k = \insmat$} \Comment{$B$ aligned to $C$ only}
-    \State For $\omega \in \seqalph:\ q_\omega \gets \eqm_\omega V_{\omega, C_j}$
+    \State For $\omega \in \alphabet:\ q_\omega \gets \eqm_\omega V_{\omega, C_j}$
   \ElsIf{$k = \matdel$} \Comment{$B$ aligned to $A$ only}
-    \State For $\omega \in \seqalph:\ q_\omega \gets U_{A_i, \omega}$
+    \State For $\omega \in \alphabet:\ q_\omega \gets U_{A_i, \omega}$
   \Else \Comment{$B$ not aligned to $A$ or $C$}
     \State ${\bf q} \gets \eqm$
   \EndIf

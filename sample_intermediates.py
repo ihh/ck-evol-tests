@@ -769,10 +769,10 @@ def sample_intermediates(A, C, params, ell1, ell2, N):
         triad_path = restore_null_states(path_elim, t_ABC, u_mat)
 
         # 3. Sample B residues by traversing triad path front-to-back,
-        #    prepending each sampled residue so B is built in correct order.
+        #    appending each sampled residue as we go.
         B  = []
-        ai = len(A) - 1
-        ci = len(C) - 1
+        ai = 0
+        ci = 0
 
         inner_path = [k for k in triad_path if k not in (SS, EE)]
         for k in inner_path:
@@ -789,11 +789,11 @@ def sample_intermediates(A, C, params, ell1, ell2, N):
                 omega = (np.random.choice(params.n_alpha, p=q / q_sum)
                          if q_sum > 0
                          else np.random.choice(params.n_alpha, p=params.pi))
-                B.insert(0, omega)
+                B.append(omega)
             if k in A_CONSUME:
-                ai -= 1
+                ai += 1
             if k in C_CONSUME:
-                ci -= 1
+                ci += 1
 
         B_tuple = tuple(B)
 

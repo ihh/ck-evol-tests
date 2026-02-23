@@ -724,7 +724,7 @@ def restore_null_states(path_elim, t, u):
 # Main sampler
 # ===========================================================================
 
-def sample_intermediates(A, C, params, ell1, ell2, N):
+def sample_intermediates(A, C, params, ell1, ell2, N, compute_posteriors=True):
     """
     Sample N intermediate sequences B for A -ell1-> B -ell2-> C.
 
@@ -737,21 +737,25 @@ def sample_intermediates(A, C, params, ell1, ell2, N):
     stochastically restored during traceback.
 
     Returns dict: B_tuple -> (log_p, count)
-      where log_p = log P(B|A,C,params,ell1,ell2) and count is multiplicity.
+      where log_p = log P(B|A,C,params,ell1,ell2) (or None if
+      compute_posteriors=False) and count is multiplicity.
     """
     U  = subst_matrix(params, ell1)
     V  = subst_matrix(params, ell2)
     UV = subst_matrix(params, ell1 + ell2)
 
-    t_AB  = cond_pair_matrix(params, ell1)
-    t_BC  = cond_pair_matrix(params, ell2)
     t_ABC = triad_transition_matrix(params, ell1, ell2)
     t_elim = eliminate_null_state(t_ABC)
     u_mat  = make_u_matrix(t_ABC)
-
-    log_t_AB   = _log_safe(t_AB)
-    log_t_BC   = _log_safe(t_BC)
     log_t_elim = _log_safe(t_elim)
+
+    if compute_posteriors:
+        t_AB  = cond_pair_matrix(params, ell1)
+        t_BC  = cond_pair_matrix(params, ell2)
+        log_t_AB = _log_safe(t_AB)
+        log_t_BC = _log_safe(t_BC)
+    else:
+        t_AB = t_BC = log_t_AB = log_t_BC = None
 
     # Emission function and log forward matrix for triad HMM against (A, C).
     # Reused across all N samples.
@@ -763,7 +767,7 @@ def sample_intermediates(A, C, params, ell1, ell2, N):
     if log_p_AC == LOG0:
         raise ValueError("log P(C|A) = -inf: sequences are incompatible with model.")
 
-    results = defaultdict(lambda: [LOG0, 0])   # B -> [log_p, count]
+    results = defaultdict(lambda: [None, 0])   # B -> [log_p, count]
 
     for _ in range(N):
         # 1. Sample path through null-eliminated triad HMM (pair forward traceback)
@@ -802,12 +806,11 @@ def sample_intermediates(A, C, params, ell1, ell2, N):
 
         B_tuple = tuple(B)
 
-        # 4. Importance weight (cached on first occurrence of this B)
-        if results[B_tuple][1] == 0:
+        # 4. Posterior log-probability (cached on first occurrence of this B)
+        if compute_posteriors and results[B_tuple][1] == 0:
             log_p_AB = log_likelihood_cond(A, B, t_AB, U, params.pi)
             log_p_BC = log_likelihood_cond(B, C, t_BC, V, params.pi)
-            log_p    = log_p_AB + log_p_BC - log_p_AC
-            results[B_tuple][0] = log_p
+            results[B_tuple][0] = log_p_AB + log_p_BC - log_p_AC
 
         results[B_tuple][1] += 1
 
@@ -1003,6 +1006,13 @@ def build_parser():
     out_group = parser.add_argument_group('Output')
     out_group.add_argument('--top', type=int, default=None, metavar='K',
         help='Print only the top K results by count (default: print all).')
+    out_group.add_argument('--no-posteriors', action='store_true',
+        help=(
+            'Skip computation of posterior probabilities p(B|A,C). '
+            'Results are sorted and reported by sample count only. '
+            'Faster for large N; the sum of M(B|A)*M(C|B) over unique '
+            'sampled B sequences is a strict lower bound on Z(C|A).'
+        ))
     out_group.add_argument('--json', action='store_true',
         help='Emit structured JSON output instead of human-readable text.')
     out_group.add_argument('--json-model', action='store_true',
@@ -1092,7 +1102,8 @@ def main():
         parser.error('r must be in [0, 1).')
 
     # --- Run sampler ---
-    results = sample_intermediates(A, C, params, args.ell1, args.ell2, args.num_samples)
+    results = sample_intermediates(A, C, params, args.ell1, args.ell2, args.num_samples,
+                                    compute_posteriors=not args.no_posteriors)
 
     # --- Print results ---
     sorted_results = sorted(results.items(), key=lambda x: -x[1][1])
@@ -1110,7 +1121,7 @@ def main():
             'samples': [
                 {
                     'B':     ''.join(alphabet[r] for r in B_tuple),
-                    'log_p': float(log_p),
+                    **({'log_p': float(log_p)} if log_p is not None else {}),
                     'count': count,
                 }
                 for B_tuple, (log_p, count) in sorted_results
@@ -1133,12 +1144,19 @@ def main():
         print(f"# A = {seq_A_str}")
         print(f"# C = {seq_C_str}")
         print()
-        print(f"{'B':<25}  {'log_p':>10}  {'p':>12}  {'count':>7}")
-        print('-' * 60)
-        for B_tuple, (log_p, count) in sorted_results:
-            B_str = ''.join(alphabet[r] for r in B_tuple)
-            p_val = np.exp(log_p)
-            print(f"{B_str:<25}  {log_p:>10.4f}  {p_val:>12.4e}  {count:>7}")
+        if args.no_posteriors:
+            print(f"{'B':<25}  {'count':>7}")
+            print('-' * 35)
+            for B_tuple, (log_p, count) in sorted_results:
+                B_str = ''.join(alphabet[r] for r in B_tuple)
+                print(f"{B_str:<25}  {count:>7}")
+        else:
+            print(f"{'B':<25}  {'log_p':>10}  {'p':>12}  {'count':>7}")
+            print('-' * 60)
+            for B_tuple, (log_p, count) in sorted_results:
+                B_str = ''.join(alphabet[r] for r in B_tuple)
+                p_val = np.exp(log_p)
+                print(f"{B_str:<25}  {log_p:>10.4f}  {p_val:>12.4e}  {count:>7}")
         total = sum(count for _, count in results.values())
         print(f"\n# Total samples: {total}   Unique B: {len(results)}")
 

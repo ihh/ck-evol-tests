@@ -100,9 +100,10 @@ and $p_k$ is its posterior probability.
 Given a model of the form $M(Y|X,\ell)$ as described in \secref{ChapmanKolmogorov},
 the partition function $Z(C|A,\ell_1,\ell_2)$ can be estimated by importance sampling from this set of samples
 as follows
-\[
+\begin{equation}
 Z(C|A,\ell_1,\ell_2) \simeq \frac{1}{N} \sum_k \frac{M(B_k|A,\ell_1) M(C|B_k,\ell_2)}{c_k p_k}
-\]
+\eqnlabel{ImportanceSample}
+\end{equation}
 
 This can then be compared to $M(C|A,\ell_1+\ell_2)$ as per \eqnref{ChapmanKolmogorov}.
 

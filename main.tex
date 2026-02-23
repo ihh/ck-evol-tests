@@ -96,16 +96,24 @@ and generates a list of tuples of the form $(B_k,c_k,p_k)$
 where $B_k$ is a sequence,
 $c_k$ is its multiplicity (the number of times it appeared during sampling, so $\sum_k c_k = N$),
 and $p_k$ is its posterior probability.
+The list is sorted by decreasing $p_k$, and can be filtered for the top $K$ only.
 
 Given a model of the form $M(Y|X,\ell)$ as described in \secref{ChapmanKolmogorov},
 the partition function $Z(C|A,\ell_1,\ell_2)$ can be estimated by importance sampling from this set of samples
 as follows
 \begin{equation}
-Z(C|A,\ell_1,\ell_2) \simeq \frac{1}{N} \sum_k \frac{M(B_k|A,\ell_1) M(C|B_k,\ell_2)}{c_k p_k}
+Z(C|A,\ell_1,\ell_2) \simeq \frac{1}{N} \sum_k c_k \frac{M(B_k|A,\ell_1) M(C|B_k,\ell_2)}{p_k}
 \eqnlabel{ImportanceSample}
 \end{equation}
 
 This can then be compared to $M(C|A,\ell_1+\ell_2)$ as per \eqnref{ChapmanKolmogorov}.
+
+Alternatively, we can obtain a strict lower bound on $Z(C|A,\ell_1,\ell_2)$ by summing over the top $K$
+samples without importance weights (the expensive calculation of which can be disabled using the {\tt --no-posteriors} option)
+\begin{equation}
+Z(C|A,\ell_1,\ell_2) \geq \sum_k M(B_k|A,\ell_1) M(C|B_k,\ell_2)
+\eqnlabel{LowerBound}
+\end{equation}
 
 The Python script should be reasonably self-documenting. The {\tt --help} option provides usage info.
 I would recommend using the {\tt --json} option for machine-parseable output.

@@ -7,6 +7,9 @@
 \newcommand\prob[1]{\mbox{Pr}\left( #1 \right)}
 \newcommand\expect{\mathbb{E}}
 
+\newcommand\eqnlabel[1]{\label{eq:#1}}
+\newcommand\eqnref[1]{(\ref{eq:#1})}
+
 \newcommand\seclabel[1]{\label{sec:#1}}
 \newcommand\secref[1]{Section~\ref{sec:#1}}
 \newcommand\sref[1]{\S\ref{sec:#1}}
@@ -29,6 +32,7 @@
 
 
 \section{Chapman-Kolmogorov for sequence evolvers}
+\seclabel{ChapmanKolmogorov}
 
 Suppose we have a model for a descendant sequence $Y$ given an ancestral sequence $X$ and an evolutionary time parameter $\ell_1$.
 Denote this model by $M(Y|X,\ell_1) \equiv \prob{Y|X,\ell_1,M}$.
@@ -43,9 +47,10 @@ Z(C|A,\ell_1,\ell_2) = \sum_B M(B|A,\ell_1) M(C|B,\ell_2)
 \]
 
 If the model is Markovian and stationary then it must obey the Chapman-Kolmogorov equation
-\[
+\begin{equation}
 M(C|A,\ell_1+\ell_2) = Z(C|A,\ell_1,\ell_2)
-\]
+\eqnlabel{ChapmanKolmogorov}
+\end{equation}
 for all sequences $A,C$ and times $\ell_1,\ell_2$.
 
 \section{Importance sampling}
@@ -83,7 +88,35 @@ rather than a sequence {\em per se}, but in practice this seems not to perturb t
 If this is a good model, its posterior distribution over intermediate sequences will be not {\em too} far
 from $M$'s, and we should be able to approximate $Z$ with a small sample.
 
+\section{Python code}
+
+The accompanying Python script {\tt sample\_intermediates.py}
+takes as input a set of TKF92 model parameters and a pair of sequences,
+and generates a list of tuples of the form $(B_k,c_k,p_k)$
+where $B_k$ is a sequence,
+$c_k$ is its multiplicity (the number of times it appeared during sampling, so $\sum_k c_k = N$),
+and $p_k$ is its posterior probability.
+
+Given a model of the form $M(Y|X,\ell)$ as described in \secref{ChapmanKolmogorov},
+the partition function $Z(C|A,\ell_1,\ell_2)$ can be estimated by importance sampling from this set of samples
+as follows
+\[
+Z(C|A,\ell_1,\ell_2) \simeq \frac{1}{N} \sum_k \frac{M(B_k|A,\ell_1) M(C|B_k,\ell_2)}{c_k p_k}
+\]
+
+This can then be compared to $M(C|A,\ell_1+\ell_2)$ as per \eqnref{ChapmanKolmogorov}.
+
+The Python script should be reasonably self-documenting. The {\tt --help} option provides usage info.
+I would recommend using the {\tt --json} option for machine-parseable output.
+
+\secref{Algorithms} documents the algorithms used by the script.
+\secref{KullbackLeibler} outlines how to use this approach to estimate a relative entropy between
+the expected (Markov-consistent) distribution $Z$ and the computed model distribution $M$.
+\secref{RegularizerDiscussion} briefly speculates as to how this might be operationalized to train Markov-consistent neural models.
+
+
 \section{TKF92 HMMs and algorithms}
+\seclabel{Algorithms}
 
 \newcommand\mat{{\tt M}}
 \newcommand\ins{{\tt I}}
@@ -698,6 +731,8 @@ with which it was represented in the sampled set.
 \end{algorithm}
 
 \section{Kullback-Leibler divergence}
+\seclabel{KullbackLeibler}
+
 
 For given $A,t,u$ we can evaluate the departure from Markovian behavior using a Kullback-Leibler divergence
 \[
@@ -714,6 +749,7 @@ those infinite sums would presumably also need to be approximated by finite samp
 
 
 \section{Discussion}
+\seclabel{RegularizerDiscussion}
 
 It is still unclear how to operationalize this as a regularizer term in a training loss.
 If we simply used minibatches from the training data as an empirical sample from $\prob{A,C}$ (presumably also using some heuristic to choose $t,u$),

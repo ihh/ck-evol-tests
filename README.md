@@ -4,6 +4,8 @@ Chapman-Kolmogorov tests for sequence evolvers. Samples intermediate sequences f
 
 Given an evolutionary trajectory A → B → C, this tool samples intermediate sequences B from the exact posterior p(B|A,C) implied by the TKF92 pair HMM, using a triad HMM with stochastic traceback.
 
+The posterior probabilities P(B|A,C) are also reported, allowing the results to be used for unbiased importance sampling.
+
 ## Installation
 
 Requires Python 3.8+ with NumPy and SciPy:

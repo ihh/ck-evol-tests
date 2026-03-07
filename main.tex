@@ -54,6 +54,7 @@ M(C|A,\ell_1+\ell_2) = Z(C|A,\ell_1,\ell_2)
 for all sequences $A,C$ and times $\ell_1,\ell_2$.
 
 \section{Importance sampling}
+\seclabel{ImportanceSample}
 
 One challenge with using $Z$ is that it requires an infinite sum over intermediates $B$.
 However, we may be able to estimate $Z$ using a finite sum.
@@ -87,6 +88,74 @@ which is almost exactly solved (technically its Markovian state is a partitioned
 rather than a sequence {\em per se}, but in practice this seems not to perturb things too much).
 If this is a good model, its posterior distribution over intermediate sequences will be not {\em too} far
 from $M$'s, and we should be able to approximate $Z$ with a small sample.
+
+\section{Alternative: sampling from the model}
+\seclabel{ModelSampling}
+
+An alternative to using a TKF-based proposal distribution is to
+sample directly from the model $M$ itself.
+Given an ancestral sequence $A$ and times $\ell_1,\ell_2$:
+\begin{enumerate}
+\item Sample $C \sim M(C|A,\ell_1+\ell_2)$ to get a descendant that $M$ considers likely.
+\item Sample $N$ intermediates $B_n \sim M(B|A,\ell_1)$ by forward simulation.
+\item Estimate $Z$ by simple Monte Carlo:
+\begin{equation}
+Z(C|A,\ell_1,\ell_2) \simeq \frac{1}{N} \sum_{n=1}^{N} M(C|B_n,\ell_2)
+\eqnlabel{ModelMonteCarlo}
+\end{equation}
+\item Compare to $M(C|A,\ell_1+\ell_2)$ as per \eqnref{ChapmanKolmogorov}.
+\end{enumerate}
+Since $B_n$ is drawn from $M(B|A,\ell_1)$, the importance weight
+$M(B|A,\ell_1)/q(B)$ reduces to unity, and the estimator is simply an average of $M(C|B_n,\ell_2)$.
+
+One could also use a TKF-based (or other) proposal $q(B|A,C,\ell_1,\ell_2)$ in step~2
+and restore the importance weights as in \eqnref{ImportanceSample},
+combining the model-sampled $C$ with a variance-reduced estimate of $Z$.
+
+\subsection{Comparison of the two approaches}
+
+The two approaches---using a TKF proposal (\secref{ImportanceSample}) vs.\ sampling from $M$---differ
+in several respects.
+
+\paragraph{Variance.}
+The TKF proposal $q(B|A,C,\ell_1,\ell_2)$ conditions on both $A$ and~$C$,
+so the sampled intermediates $B$ are concentrated in the region where
+$M(B|A,\ell_1)M(C|B,\ell_2)$ is large,
+yielding low-variance importance weights.
+By contrast, sampling $B \sim M(B|A,\ell_1)$ ignores $C$ entirely:
+many samples will produce intermediates for which $M(C|B,\ell_2)$ is negligible,
+wasting effort. This problem worsens as sequences grow longer or evolutionary distances increase.
+
+\paragraph{Requirements on $M$.}
+The model-sampling approach requires that $M$ can both generate sequences
+(sample from $M(B|A,\ell_1)$ and $M(C|A,\ell_1+\ell_2)$) and
+evaluate conditional likelihoods ($M(C|B,\ell_2)$).
+The TKF proposal approach requires only that $M$ can evaluate likelihoods,
+not that it can sample; the sampling is handled by the TKF machinery.
+For neural models that are naturally generative (e.g.\ autoregressive sequence models),
+the model-sampling approach may be more natural;
+for models where likelihood evaluation is easy but sampling is expensive, the TKF approach is preferable.
+
+\paragraph{Choice of $C$.}
+In the model-sampling approach, $C$ is drawn from $M(C|A,\ell_1+\ell_2)$,
+so we automatically test Chapman-Kolmogorov at points where $M$ places mass.
+In the TKF approach, $C$ can be chosen freely---e.g.\ from training data
+or from the TKF model---and need not be representative of $M$'s distribution.
+For computing a KL divergence (\secref{KullbackLeibler}), sampling $C$ from $M$ is appropriate
+since the expectation is over $M(C|A,\ell_1+\ell_2)$.
+
+\paragraph{Implementation complexity.}
+The model-sampling approach avoids the need for TKF parameterization and the
+triad HMM machinery of \secref{Algorithms}, requiring only forward simulation
+and likelihood evaluation under $M$.
+The TKF approach requires implementing the pair and triad HMMs,
+null state elimination, and stochastic traceback,
+but rewards this investment with substantially lower estimator variance.
+
+\paragraph{Hybrid approach.}
+A practical middle ground is to sample $C$ from $M$ (to focus on likely descendants)
+but use a TKF proposal for the $B$ intermediates (to reduce variance in the $Z$ estimate).
+
 
 \section{Python code}
 
